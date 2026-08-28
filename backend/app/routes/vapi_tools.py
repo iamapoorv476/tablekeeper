@@ -1,0 +1,158 @@
+import time
+import logging
+from fastapi import APIRouter, Request
+
+from app.db import get_conn
+from app.models import (
+    CheckAvailabilityRequest,
+    CreateReservationRequest,
+    ModifyReservationRequest,
+    LookupGuestRequest,
+)
+from app.services.availability import (
+    find_smallest_fitting_table,
+    find_alternatives,
+    DEFAULT_RESTAURANT_ID,
+)
+from app.services.reservations import create_reservation, modify_reservation
+from app.services.guests import lookup_guest_by_phone, get_last_reservation_id
+
+router = APIRouter()
+logger = logging.getLogger("voice-agent")
+
+
+# ---------------------------------------------------------------------------
+# Plain REST endpoints — used for Day 1 local/curl testing, and reusable
+# directly as the implementation the Vapi webhook dispatches into.
+# ---------------------------------------------------------------------------
+
+@router.post("/tools/check_availability")
+async def check_availability_endpoint(payload: CheckAvailabilityRequest):
+    restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
+    async with get_conn() as conn:
+        table = await find_smallest_fitting_table(
+            conn, restaurant_id, payload.party_size, payload.date, payload.time
+        )
+        if table:
+            return {
+                "available": True,
+                "matching_table": {"id": str(table["id"]), "label": table["label"], "seats": table["seats"]},
+                "alternatives": [],
+            }
+        alternatives = await find_alternatives(
+            conn, restaurant_id, payload.party_size, payload.date, payload.time
+        )
+        return {
+            "available": False,
+            "matching_table": None,
+            "alternatives": [{"time": t} for t in alternatives],
+        }
+
+
+@router.post("/tools/create_reservation")
+async def create_reservation_endpoint(payload: CreateReservationRequest):
+    restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
+    async with get_conn() as conn:
+        return await create_reservation(
+            conn,
+            restaurant_id,
+            payload.party_size,
+            payload.date,
+            payload.time,
+            payload.guest_name,
+            payload.caller_number,
+        )
+
+
+@router.post("/tools/modify_reservation")
+async def modify_reservation_endpoint(payload: ModifyReservationRequest):
+    restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
+    async with get_conn() as conn:
+        return await modify_reservation(
+            conn,
+            restaurant_id,
+            payload.reservation_id,
+            payload.caller_number,
+            payload.new_date,
+            payload.new_time,
+            payload.new_party_size,
+        )
+
+
+@router.post("/tools/lookup_guest")
+async def lookup_guest_endpoint(payload: LookupGuestRequest):
+    restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
+    async with get_conn() as conn:
+        guest = await lookup_guest_by_phone(conn, restaurant_id, payload.caller_number)
+        if guest is None:
+            return {"known": False, "name": None, "preference": None, "last_reservation_id": None}
+        last_id = await get_last_reservation_id(conn, guest["id"])
+        return {
+            "known": True,
+            "name": guest["name"],
+            "preference": guest["preferences"],
+            "last_reservation_id": last_id,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Vapi webhook — single URL, dispatches on function name inside the payload.
+# Wired up on Day 2. Included now so Day 1's service functions are already
+# reusable without changes.
+# ---------------------------------------------------------------------------
+
+TOOL_DISPATCH = {
+    "check_availability": check_availability_endpoint,
+    "create_reservation": create_reservation_endpoint,
+    "modify_reservation": modify_reservation_endpoint,
+    "lookup_guest": lookup_guest_endpoint,
+}
+
+MODEL_MAP = {
+    "check_availability": CheckAvailabilityRequest,
+    "create_reservation": CreateReservationRequest,
+    "modify_reservation": ModifyReservationRequest,
+    "lookup_guest": LookupGuestRequest,
+}
+
+
+@router.post("/vapi/tools")
+async def vapi_tools_webhook(request: Request):
+    body = await request.json()
+    message = body.get("message", {})
+
+    if message.get("type") != "tool-calls":
+        return {"results": []}
+
+    call = message.get("call", {}) or {}
+    caller_number = (call.get("customer") or {}).get("number")
+    vapi_call_id = call.get("id")
+
+    results = []
+    for tool_call in message.get("toolCallList", []):
+        tool_call_id = tool_call.get("id")
+        fn = tool_call.get("function", {}) or {}
+        name = fn.get("name")
+        args = fn.get("arguments", {}) or {}
+
+        # inject caller number server-side rather than trusting the LLM to supply it
+        if caller_number and "caller_number" in MODEL_MAP.get(name, object).__fields__:
+            args.setdefault("caller_number", caller_number)
+
+        start = time.perf_counter()
+        result_payload = {"error": f"unknown tool {name}"}
+        try:
+            if name in TOOL_DISPATCH:
+                model_cls = MODEL_MAP[name]
+                parsed = model_cls(**args)
+                result_payload = await TOOL_DISPATCH[name](parsed)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("tool call failed: %s", name)
+            result_payload = {"error": str(exc)}
+        latency_ms = int((time.perf_counter() - start) * 1000)
+
+        logger.info("tool=%s latency_ms=%d call_id=%s", name, latency_ms, vapi_call_id)
+
+        results.append({"toolCallId": tool_call_id, "result": str(result_payload)})
+
+    return {"results": results}
