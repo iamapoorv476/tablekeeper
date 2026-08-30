@@ -58,14 +58,15 @@ async def create_reservation(
         row = await conn.fetchrow(
             """
             insert into reservations
-                (restaurant_id, table_id, guest_id, party_size, reservation_date,
+                (restaurant_id, table_id, guest_id, guest_name,  party_size, reservation_date,
                  reservation_time, duration_minutes, status, source)
-            values ($1, $2, $3, $4, $5, $6, $7, 'confirmed', 'voice')
+            values ($1, $2, $3, $4, $5, $6, $7, $8,  'confirmed', 'voice')
             returning id
             """,
             restaurant_id,
             table["id"],
             guest_id,
+            guest_name,
             party_size,
             _parse_date(date),
             _parse_time(time_str),

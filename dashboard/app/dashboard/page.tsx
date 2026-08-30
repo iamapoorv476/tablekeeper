@@ -14,7 +14,7 @@ import FloorMap from "@/components/FloorMap";
 
 const SELECT = `
   id, party_size, reservation_date, reservation_time, duration_minutes,
-  status, source, created_at,
+  status, source, created_at, guest_name,
   tables ( label, seats ),
   guests ( name, preferences )
 `;

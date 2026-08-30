@@ -7,6 +7,7 @@ export type Reservation = {
   status: string;
   source: string;
   created_at: string;
+  guest_name: string | null;
   tables: { label: string; seats: number } | null;
   guests: { name: string | null; preferences: string | null } | null;
 };

@@ -27,8 +27,10 @@ function ReservationRow({
   reservation: Reservation;
   isArriving: boolean;
 }) {
-  const name = reservation.guests?.name ?? "Walk-in";
+ // const name = reservation.guests?.name ?? "Walk-in";
+  const name = reservation.guest_name ?? reservation.guests?.name ?? "Walk-in";
   const table = reservation.tables?.label ?? "—";
+
 
   return (
     <div
