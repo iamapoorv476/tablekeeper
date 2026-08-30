@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  background-color: #1a1614;
+  color: #f0eae0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Quality floor: honour the OS reduced-motion setting everywhere.
+   The arriving-reservation amber hold still fires, so the event stays
+   legible — only the travel and fade are removed. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::selection {
+  background-color: #e8a33d;
+  color: #1a1614;
+}
+
+/* Visible keyboard focus that matches the palette rather than the UA default */
+:focus-visible {
+  outline: 2px solid #e8a33d;
+  outline-offset: 2px;
+}

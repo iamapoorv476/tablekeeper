@@ -1,0 +1,164 @@
+"""
+Creates the four function tools on Vapi, then creates the assistant
+referencing them by ID (current Vapi API requires tools to be created
+separately and attached via model.toolIds — embedding them inline under
+assistant.tools or model.tools is rejected with a 400).
+
+Usage:
+    export VAPI_API_KEY="your-vapi-private-key"
+    export SERVER_URL="https://your-tunnel-or-railway-url/vapi/tools"
+    python scripts/create_assistant.py
+"""
+import os
+import sys
+from datetime import datetime
+import requests
+
+VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
+SERVER_URL = os.environ.get("SERVER_URL")
+
+if not VAPI_API_KEY:
+    sys.exit("Set VAPI_API_KEY first: export VAPI_API_KEY=your-vapi-private-key")
+if not SERVER_URL:
+    sys.exit("Set SERVER_URL first: export SERVER_URL=https://your-tunnel-or-railway-url/vapi/tools")
+
+HEADERS = {
+    "Authorization": f"Bearer {VAPI_API_KEY}",
+    "Content-Type": "application/json",
+}
+
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "check_availability",
+            "description": "Check whether a table is free for a given party size, date, and time. Always call this before create_reservation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "party_size": {"type": "integer", "description": "Number of guests"},
+                    "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                    "time": {"type": "string", "description": "Time in 24-hour HH:MM format"},
+                },
+                "required": ["party_size", "date", "time"],
+            },
+        },
+        "server": {"url": SERVER_URL},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_reservation",
+            "description": "Book a table. Only call this after check_availability has confirmed the slot is available.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "party_size": {"type": "integer"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "time": {"type": "string", "description": "24-hour HH:MM"},
+                    "guest_name": {"type": "string"},
+                },
+                "required": ["party_size", "date", "time", "guest_name"],
+            },
+        },
+        "server": {"url": SERVER_URL},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_reservation",
+            "description": "Change the time, date, or party size of the caller's existing reservation. Resolves the reservation automatically from the caller's phone number if reservation_id isn't known.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "new_date": {"type": "string", "description": "YYYY-MM-DD, only if the date is changing"},
+                    "new_time": {"type": "string", "description": "24-hour HH:MM, only if the time is changing"},
+                    "new_party_size": {"type": "integer", "description": "Only if the party size is changing"},
+                },
+            },
+        },
+        "server": {"url": SERVER_URL},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_guest",
+            "description": "Look up whether the caller is a returning guest. Call this once, silently, at the very start of the call.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        "server": {"url": SERVER_URL},
+    },
+]
+
+SYSTEM_PROMPT_TEMPLATE = """You are Mia, the phone host at Basilico Trattoria, an Italian restaurant. You are warm, brief, and efficient — this is a phone call, not a chat, so keep every response to 1-2 short sentences unless reading back a confirmation.
+
+TODAY'S DATE: {today}. When the caller says "today", "tomorrow", "next Friday", or any other relative date, compute the actual calendar date yourself using today's date above before calling any tool. Always pass tool arguments as an exact YYYY-MM-DD date — never pass the word "tomorrow" itself to a tool.
+
+YOUR JOB:
+1. At the very start of the call, silently call lookup_guest with the caller's number. If known, greet them by name and naturally reference their preference once (e.g. 'Hi Aarav, welcome back — window seat again tonight?'). If unknown, just greet normally.
+2. If they want to book a table: collect party size, date, time, and name (skip name if lookup_guest already gave you one). Before confirming ANYTHING, call check_availability. If available, call create_reservation and read back the confirmation_summary exactly as returned. If NOT available, offer the alternatives returned by the tool — never invent times yourself.
+3. If they want to change an existing booking: call modify_reservation with whatever they're changing (time/date/party size). If it fails, offer the alternatives it returns.
+4. If they ask about the menu, dietary options, or restaurant policies, answer using ONLY this information:
+
+MENU: Our signature dish is the truffle tagliatelle. Popular starters include burrata with heirloom tomatoes and wood-fired focaccia.
+
+DIETARY: We have a full vegan menu including vegan lasagna and mushroom risotto. Gluten-free pasta is available as a substitute on any pasta dish at no extra charge, plus gluten-free bread.
+
+POLICIES: Reservations are held 15 minutes past the booked time before the table may be released. Parties larger than 8 require a deposit and 24 hours notice. Dress code is smart casual, nothing strict.
+
+RULES:
+- Never make up availability, table numbers, or policies not listed above.
+- Never call create_reservation without calling check_availability first in the same turn sequence.
+- Keep responses short — you're on a phone call, not writing an email.
+- If party size, date, time, or name is missing, ask for just the missing piece, not everything at once.
+- Confirm bookings by reading back the exact confirmation_summary text from the tool result, not your own paraphrase."""
+
+SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(today=datetime.now().strftime("%A, %B %d, %Y"))
+
+
+def create_tool(tool_def):
+    resp = requests.post("https://api.vapi.ai/tool", headers=HEADERS, json=tool_def)
+    if resp.status_code >= 300:
+        print(f"Failed to create tool '{tool_def['function']['name']}' ({resp.status_code}):")
+        print(resp.text)
+        sys.exit(1)
+    data = resp.json()
+    print(f"  Created tool: {tool_def['function']['name']} -> {data['id']}")
+    return data["id"]
+
+
+def create_assistant(tool_ids):
+    payload = {
+        "name": "Basilico Trattoria Host",
+        "firstMessage": "Thanks for calling Basilico Trattoria, this is Mia — how can I help you today?",
+        "model": {
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5-20251001",
+            "temperature": 0.4,
+            "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
+            "toolIds": tool_ids,
+        },
+        "voice": {"provider": "deepgram", "voiceId": "luna"},
+        "transcriber": {"provider": "deepgram", "model": "nova-2", "language": "en-US"},
+        "server": {"url": SERVER_URL},
+        "endCallFunctionEnabled": True,
+        "maxDurationSeconds": 300,
+    }
+    resp = requests.post("https://api.vapi.ai/assistant", headers=HEADERS, json=payload)
+    if resp.status_code >= 300:
+        print(f"Failed to create assistant ({resp.status_code}):")
+        print(resp.text)
+        sys.exit(1)
+    return resp.json()
+
+
+print("Creating tools...")
+tool_ids = [create_tool(t) for t in TOOL_DEFINITIONS]
+
+print("\nCreating assistant...")
+assistant = create_assistant(tool_ids)
+
+print(f"\nAssistant created: {assistant['id']}")
+print(f"Name: {assistant['name']}")
+print("\nNext step: go to Vapi dashboard -> Phone Numbers -> your number")
+print(f"-> assign this assistant ({assistant['id']}) to it.")

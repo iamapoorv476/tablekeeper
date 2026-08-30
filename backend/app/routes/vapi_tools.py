@@ -21,11 +21,6 @@ router = APIRouter()
 logger = logging.getLogger("voice-agent")
 
 
-# ---------------------------------------------------------------------------
-# Plain REST endpoints — used for Day 1 local/curl testing, and reusable
-# directly as the implementation the Vapi webhook dispatches into.
-# ---------------------------------------------------------------------------
-
 @router.post("/tools/check_availability")
 async def check_availability_endpoint(payload: CheckAvailabilityRequest):
     restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
@@ -97,8 +92,12 @@ async def lookup_guest_endpoint(payload: LookupGuestRequest):
 
 # ---------------------------------------------------------------------------
 # Vapi webhook — single URL, dispatches on function name inside the payload.
-# Wired up on Day 2. Included now so Day 1's service functions are already
-# reusable without changes.
+#
+# IMPORTANT: as of the current Vapi API, each entry in toolCallList carries
+# "name" and "arguments" directly (e.g. {"id": ..., "name": "get_weather",
+# "arguments": {...}}) — NOT nested under a "function" key as in classic
+# OpenAI-style function calling. We check the top-level shape first and fall
+# back to a nested "function" key for safety.
 # ---------------------------------------------------------------------------
 
 TOOL_DISPATCH = {
@@ -116,10 +115,32 @@ MODEL_MAP = {
 }
 
 
+def _extract_name_and_args(tool_call: dict):
+    if "name" in tool_call:
+        return tool_call.get("name"), tool_call.get("arguments", {}) or {}
+    fn = tool_call.get("function", {}) or {}
+    return fn.get("name"), fn.get("arguments", {}) or {}
+
+
 @router.post("/vapi/tools")
 async def vapi_tools_webhook(request: Request):
     body = await request.json()
     message = body.get("message", {})
+
+    if message.get("type") == "status-update" and message.get("status") == "in-progress":
+        call = message.get("call", {}) or {}
+        async with get_conn() as conn:
+            await conn.execute(
+                """
+                insert into call_logs (vapi_call_id, restaurant_id, caller_number, started_at)
+                values ($1, $2, $3, now())
+                on conflict do nothing
+                """,
+                call.get("id"),
+                DEFAULT_RESTAURANT_ID,
+                (call.get("customer") or {}).get("number"),
+            )
+        return {"results": []}
 
     if message.get("type") != "tool-calls":
         return {"results": []}
@@ -131,19 +152,17 @@ async def vapi_tools_webhook(request: Request):
     results = []
     for tool_call in message.get("toolCallList", []):
         tool_call_id = tool_call.get("id")
-        fn = tool_call.get("function", {}) or {}
-        name = fn.get("name")
-        args = fn.get("arguments", {}) or {}
+        name, args = _extract_name_and_args(tool_call)
+        args = dict(args)
 
-        # inject caller number server-side rather than trusting the LLM to supply it
-        if caller_number and "caller_number" in MODEL_MAP.get(name, object).__fields__:
+        model_cls = MODEL_MAP.get(name)
+        if caller_number and model_cls and "caller_number" in model_cls.__fields__:
             args.setdefault("caller_number", caller_number)
 
         start = time.perf_counter()
         result_payload = {"error": f"unknown tool {name}"}
         try:
             if name in TOOL_DISPATCH:
-                model_cls = MODEL_MAP[name]
                 parsed = model_cls(**args)
                 result_payload = await TOOL_DISPATCH[name](parsed)
         except Exception as exc:  # noqa: BLE001

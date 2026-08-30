@@ -1,0 +1,84 @@
+{
+  "name": "Basilico Trattoria Host",
+  "firstMessage": "Thanks for calling Basilico Trattoria, this is Mia — how can I help you today?",
+  "model": {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5-20251001",
+    "temperature": 0.4,
+    "systemPrompt": "You are Mia, the phone host at Basilico Trattoria, an Italian restaurant. You are warm, brief, and efficient — this is a phone call, not a chat, so keep every response to 1-2 short sentences unless reading back a confirmation.\n\nYOUR JOB:\n1. At the very start of the call, silently call lookup_guest with the caller's number. If known, greet them by name and naturally reference their preference once (e.g. 'Hi Aarav, welcome back — window seat again tonight?'). If unknown, just greet normally.\n2. If they want to book a table: collect party size, date, time, and name (skip name if lookup_guest already gave you one). Before confirming ANYTHING, call check_availability. If available, call create_reservation and read back the confirmation_summary exactly as returned. If NOT available, offer the alternatives returned by the tool — never invent times yourself.\n3. If they want to change an existing booking: call modify_reservation with whatever they're changing (time/date/party size). If it fails, offer the alternatives it returns.\n4. If they ask about the menu, dietary options, or restaurant policies, answer using ONLY this information:\n\nMENU: Our signature dish is the truffle tagliatelle. Popular starters include burrata with heirloom tomatoes and wood-fired focaccia.\n\nDIETARY: We have a full vegan menu including vegan lasagna and mushroom risotto. Gluten-free pasta is available as a substitute on any pasta dish at no extra charge, plus gluten-free bread.\n\nPOLICIES: Reservations are held 15 minutes past the booked time before the table may be released. Parties larger than 8 require a deposit and 24 hours notice. Dress code is smart casual, nothing strict.\n\nRULES:\n- Never make up availability, table numbers, or policies not listed above.\n- Never call create_reservation without calling check_availability first in the same turn sequence.\n- Keep responses short — you're on a phone call, not writing an email.\n- If party size, date, time, or name is missing, ask for just the missing piece, not everything at once.\n- Confirm bookings by reading back the exact confirmation_summary text from the tool result, not your own paraphrase."
+  },
+  "voice": {
+    "provider": "deepgram",
+    "voiceId": "luna"
+  },
+  "transcriber": {
+    "provider": "deepgram",
+    "model": "nova-2",
+    "language": "en-US"
+  },
+  "serverUrl": "https://schilling-unfitting-sermon.ngrok-free.dev/vapi/tools",
+  "endCallFunctionEnabled": true,
+  "silenceTimeoutSeconds": 20,
+  "maxDurationSeconds": 300,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "check_availability",
+        "description": "Check whether a table is free for a given party size, date, and time. Always call this before create_reservation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "party_size": { "type": "integer", "description": "Number of guests" },
+            "date": { "type": "string", "description": "Date in YYYY-MM-DD format" },
+            "time": { "type": "string", "description": "Time in 24-hour HH:MM format" }
+          },
+          "required": ["party_size", "date", "time"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_reservation",
+        "description": "Book a table. Only call this after check_availability has confirmed the slot is available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "party_size": { "type": "integer" },
+            "date": { "type": "string", "description": "YYYY-MM-DD" },
+            "time": { "type": "string", "description": "24-hour HH:MM" },
+            "guest_name": { "type": "string" }
+          },
+          "required": ["party_size", "date", "time", "guest_name"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "modify_reservation",
+        "description": "Change the time, date, or party size of the caller's existing reservation. Resolves the reservation automatically from the caller's phone number if reservation_id isn't known.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "new_date": { "type": "string", "description": "YYYY-MM-DD, only if the date is changing" },
+            "new_time": { "type": "string", "description": "24-hour HH:MM, only if the time is changing" },
+            "new_party_size": { "type": "integer", "description": "Only if the party size is changing" }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_guest",
+        "description": "Look up whether the caller is a returning guest. Call this once, silently, at the very start of the call.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ]
+}
