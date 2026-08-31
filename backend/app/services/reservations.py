@@ -49,6 +49,10 @@ async def create_reservation(
                 "success": False,
                 "error": "That slot is no longer available.",
                 "alternatives": [{"time": t} for t in alternatives],
+                "next_step": (
+                    "Offer the alternatives above. If none work for the guest, "
+                    "use request_callback so the team can find them something."
+                ),
             }
 
         guest_id = None
@@ -58,9 +62,9 @@ async def create_reservation(
         row = await conn.fetchrow(
             """
             insert into reservations
-                (restaurant_id, table_id, guest_id, guest_name,  party_size, reservation_date,
+                (restaurant_id, table_id, guest_id, guest_name, party_size, reservation_date,
                  reservation_time, duration_minutes, status, source)
-            values ($1, $2, $3, $4, $5, $6, $7, $8,  'confirmed', 'voice')
+            values ($1, $2, $3, $4, $5, $6, $7, $8, 'confirmed', 'voice')
             returning id
             """,
             restaurant_id,
@@ -115,14 +119,29 @@ async def modify_reservation(
     async with conn.transaction():
         resolved_id = await _resolve_reservation_id(conn, restaurant_id, reservation_id, caller_number)
         if resolved_id is None:
-            return {"success": False, "error": "Could not find an existing reservation for this caller."}
+            return {
+                "success": False,
+                "error": "Could not find an existing reservation for this caller.",
+                "next_step": (
+                    "Do NOT claim the change was made. Ask once for the phone number "
+                    "the booking was made under. If that still finds nothing, use "
+                    "request_callback with what they wanted changed."
+                ),
+            }
 
         current = await conn.fetchrow(
             "select party_size, reservation_date, reservation_time, table_id from reservations where id = $1::uuid",
             resolved_id,
         )
         if current is None:
-            return {"success": False, "error": "Reservation not found."}
+            return {
+                "success": False,
+                "error": "Reservation not found.",
+                "next_step": (
+                    "Do NOT claim the change was made. Use request_callback so the "
+                    "team can sort it out with the guest."
+                ),
+            }
 
         target_date = new_date or current["reservation_date"].isoformat()
         target_time = new_time or current["reservation_time"].strftime("%H:%M")
@@ -168,6 +187,10 @@ async def modify_reservation(
                 "success": False,
                 "error": "That new slot isn't available.",
                 "alternatives": [{"time": t} for t in alternatives],
+                "next_step": (
+                    "The original booking is unchanged. Offer the alternatives. "
+                    "If none work, use request_callback."
+                ),
             }
 
         await conn.execute(

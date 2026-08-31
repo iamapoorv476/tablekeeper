@@ -70,3 +70,17 @@ class LookupGuestResponse(BaseModel):
     name: Optional[str] = None
     preference: Optional[str] = None
     last_reservation_id: Optional[str] = None
+
+
+class RequestCallbackRequest(BaseModel):
+    reason: str          # why the agent could not close it
+    context: str         # what the guest actually asked for
+    guest_name: Optional[str] = None
+    caller_number: Optional[str] = None
+    restaurant_id: Optional[str] = None
+
+
+class RequestCallbackResponse(BaseModel):
+    success: bool
+    callback_id: Optional[str] = None
+    message: Optional[str] = None

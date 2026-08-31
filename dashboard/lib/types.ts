@@ -12,6 +12,16 @@ export type Reservation = {
   guests: { name: string | null; preferences: string | null } | null;
 };
 
+export type Callback = {
+  id: string;
+  caller_number: string | null;
+  guest_name: string | null;
+  reason: string;
+  context: string;
+  status: string;
+  created_at: string;
+};
+
 export type TableRow = {
   id: string;
   label: string;

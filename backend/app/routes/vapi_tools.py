@@ -8,6 +8,7 @@ from app.models import (
     CreateReservationRequest,
     ModifyReservationRequest,
     LookupGuestRequest,
+    RequestCallbackRequest,
 )
 from app.services.availability import (
     find_smallest_fitting_table,
@@ -16,6 +17,7 @@ from app.services.availability import (
 )
 from app.services.reservations import create_reservation, modify_reservation
 from app.services.guests import lookup_guest_by_phone, get_last_reservation_id
+from app.services.callbacks import create_callback
 
 router = APIRouter()
 logger = logging.getLogger("voice-agent")
@@ -89,6 +91,21 @@ async def lookup_guest_endpoint(payload: LookupGuestRequest):
             "last_reservation_id": last_id,
         }
 
+@router.post("/tools/request_callback")
+async def request_callback_endpoint(payload: RequestCallbackRequest):
+    """The no-dead-ends path. Anything the agent can't close on the call gets
+    written here with enough context for a human to pick it up cold."""
+    restaurant_id = payload.restaurant_id or DEFAULT_RESTAURANT_ID
+    async with get_conn() as conn:
+        return await create_callback(
+            conn,
+            restaurant_id,
+            payload.reason,
+            payload.context,
+            payload.caller_number,
+            payload.guest_name,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Vapi webhook — single URL, dispatches on function name inside the payload.
@@ -105,6 +122,7 @@ TOOL_DISPATCH = {
     "create_reservation": create_reservation_endpoint,
     "modify_reservation": modify_reservation_endpoint,
     "lookup_guest": lookup_guest_endpoint,
+    "request_callback": request_callback_endpoint,
 }
 
 MODEL_MAP = {
@@ -112,6 +130,7 @@ MODEL_MAP = {
     "create_reservation": CreateReservationRequest,
     "modify_reservation": ModifyReservationRequest,
     "lookup_guest": LookupGuestRequest,
+    "request_callback": RequestCallbackRequest,
 }
 
 

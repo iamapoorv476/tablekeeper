@@ -6,11 +6,13 @@ import { supabase } from "@/lib/supabaseClient";
 import {
   Reservation,
   TableRow,
+  Callback,
   toDateKey,
   formatDateKey,
 } from "@/lib/types";
 import ReservationRail from "@/components/ReservationRail";
 import FloorMap from "@/components/FloorMap";
+import CallbackQueue from "@/components/CallbackQueue";
 
 const SELECT = `
   id, party_size, reservation_date, reservation_time, duration_minutes,
@@ -28,6 +30,7 @@ export default function DashboardPage() {
   const [dateKey, setDateKey] = useState(() => toDateKey(new Date()));
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [tables, setTables] = useState<TableRow[]>([]);
+  const [callbacks, setCallbacks] = useState<Callback[]>([]);
   const [arrivingIds, setArrivingIds] = useState<Set<string>>(new Set());
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [loading, setLoading] = useState(true);
@@ -56,6 +59,41 @@ export default function DashboardPage() {
     }
     setReservations((data ?? []) as unknown as Reservation[]);
   }, []);
+
+  // Callbacks are not date-scoped: an open request stays open until a human
+  // clears it, regardless of which service day it came in on.
+  const loadCallbacks = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("callbacks")
+      .select("id, caller_number, guest_name, reason, context, status, created_at")
+      .eq("status", "open")
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Failed to load callbacks:", error.message);
+      return;
+    }
+    setCallbacks((data ?? []) as Callback[]);
+  }, []);
+
+  const resolveCallback = useCallback(
+    async (id: string) => {
+      // Optimistic: clear it locally, then persist. Realtime will reconcile.
+      setCallbacks((prev) => prev.filter((c) => c.id !== id));
+      const { error } = await supabase
+        .from("callbacks")
+        .update({ status: "resolved", resolved_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) {
+        console.error("Failed to resolve callback:", error.message);
+        loadCallbacks();
+      }
+    },
+    [loadCallbacks]
+  );
+
+  useEffect(() => {
+    loadCallbacks();
+  }, [loadCallbacks]);
 
   // Tables change ~never, so they're fetched once rather than per date.
   useEffect(() => {
@@ -111,6 +149,13 @@ export default function DashboardPage() {
           }
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "callbacks" },
+        () => {
+          loadCallbacks();
+        }
+      )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setConnection("live");
         else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT")
@@ -120,7 +165,7 @@ export default function DashboardPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadReservations]);
+  }, [loadReservations, loadCallbacks]);
 
   const shiftDay = (delta: number) => {
     const [y, m, d] = dateKey.split("-").map(Number);
@@ -216,7 +261,15 @@ export default function DashboardPage() {
           </section>
 
           <aside className="lg:sticky lg:top-8 lg:self-start">
-            <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.18em] text-muted/70">
+            <h2 className="mb-3 flex items-baseline gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted/70">
+              Needs a callback
+              {callbacks.length > 0 && (
+                <span className="text-amber">{callbacks.length}</span>
+              )}
+            </h2>
+            <CallbackQueue callbacks={callbacks} onResolve={resolveCallback} />
+
+            <h2 className="mb-3 mt-8 font-mono text-[11px] uppercase tracking-[0.18em] text-muted/70">
               Floor
             </h2>
             <FloorMap tables={tables} reservations={reservations} />
