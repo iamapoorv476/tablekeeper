@@ -66,7 +66,7 @@ def call_tool(name: str, arguments: dict, caller_number: str | None = None) -> d
             "toolCallList": [{"id": call_id, "name": name, "arguments": arguments}],
         }
     }
-    resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+    resp = requests.post(WEBHOOK_URL, json=payload, timeout=30)
     resp.raise_for_status()
     results = resp.json().get("results", [])
     for r in results:
@@ -87,7 +87,7 @@ def call_raw(tool_calls: list[dict], caller_number: str | None = None) -> list[d
             "toolCallList": tool_calls,
         }
     }
-    resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+    resp = requests.post(WEBHOOK_URL, json=payload, timeout=30)
     return resp.status_code, resp.json() if resp.status_code == 200 else resp.text
 
 
