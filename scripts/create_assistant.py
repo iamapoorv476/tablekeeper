@@ -17,6 +17,19 @@ import requests
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 SERVER_URL = os.environ.get("SERVER_URL")
 
+LANGUAGE = os.environ.get("LANGUAGE", "en")
+VOICE_PROVIDER = os.environ.get("VOICE_PROVIDER", "azure" if LANGUAGE == "sv" else "deepgram")
+VOICE_ID = os.environ.get("VOICE_ID", "sv-SE-SofieNeural" if LANGUAGE == "sv" else "luna")
+TRANSCRIBER_LANGUAGE = os.environ.get("TRANSCRIBER_LANGUAGE", "sv" if LANGUAGE == "sv" else "en-US")
+
+if LANGUAGE == "sv" and not VOICE_ID:
+    sys.exit(
+        "LANGUAGE=sv requires VOICE_ID to be set explicitly.\n"
+        "Go to Vapi's dashboard, open the voice picker, search for a Swedish "
+        "voice, and set VOICE_PROVIDER + VOICE_ID to what you find — I don't "
+        "have a verified default for this, see the comment above LANGUAGE."
+    )
+
 if not VAPI_API_KEY:
     sys.exit("Set VAPI_API_KEY first: export VAPI_API_KEY=your-vapi-private-key")
 if not SERVER_URL:
@@ -152,8 +165,42 @@ RULES:
 - When a tool result includes a "next_step" field, follow it. It tells you exactly how to recover
   from that specific failure. Do not improvise a different recovery."""
 
-SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(today=datetime.now().strftime("%A, %B %d, %Y"))
+LANGUAGE_CONTENT = {
+    "en": {
+        "first_message": "Thanks for calling Basilico Trattoria, this is Mia — how can I help you today?",
+        "menu": "Our signature dish is the truffle tagliatelle. Popular starters include burrata with heirloom tomatoes and wood-fired focaccia.",
+        "dietary": "We have a full vegan menu including vegan lasagna and mushroom risotto. Gluten-free pasta is available as a substitute on any pasta dish at no extra charge, plus gluten-free bread.",
+        "policies": "Reservations are held 15 minutes past the booked time before the table may be released. Parties larger than 8 require a deposit and 24 hours notice. Dress code is smart casual, nothing strict.",
+        "language_instruction": "",
+    },
+    "sv": {
+        "first_message": "Tack för att du ringer Basilico Trattoria, det här är Mia — hur kan jag hjälpa dig idag?",
+        "menu": "Vår signaturrätt är tryffeltagliatelle. Populära förrätter är burrata med arvsorterade tomater och vedeldad focaccia.",
+        "dietary": "Vi har en komplett vegansk meny, inklusive vegansk lasagne och svamprisotto. Glutenfri pasta finns som ersättning till alla pastarätter utan extra kostnad, samt glutenfritt bröd.",
+        "policies": "Bordsbokningar hålls i 15 minuter efter den bokade tiden innan bordet kan släppas. Sällskap större än 8 personer kräver en deposition och 24 timmars varsel. Klädkoden är smart casual, inget strikt.",
+        "language_instruction": "\n\nIMPORTANT: Always speak to the caller in Swedish, regardless of what language they use. Every spoken response must be in Swedish. This instruction overrides nothing else — check_availability, create_reservation, etc. still take the same English field names and English-formatted dates/times as arguments; only what you SAY to the caller is in Swedish.",
+    },
+}
 
+_content = LANGUAGE_CONTENT[LANGUAGE]
+
+SYSTEM_PROMPT = (
+    SYSTEM_PROMPT_TEMPLATE
+    .replace(
+        "MENU: Our signature dish is the truffle tagliatelle. Popular starters include burrata with heirloom tomatoes and wood-fired focaccia.",
+        f"MENU: {_content['menu']}",
+    )
+    .replace(
+        "DIETARY: We have a full vegan menu including vegan lasagna and mushroom risotto. Gluten-free pasta is available as a substitute on any pasta dish at no extra charge, plus gluten-free bread.",
+        f"DIETARY: {_content['dietary']}",
+    )
+    .replace(
+        "POLICIES: Reservations are held 15 minutes past the booked time before the table may be released. Parties larger than 8 require a deposit and 24 hours notice. Dress code is smart casual, nothing strict.",
+        f"POLICIES: {_content['policies']}",
+    )
+    .format(today=datetime.now().strftime("%A, %B %d, %Y"))
+    + _content["language_instruction"]
+)
 
 def create_tool(tool_def):
     resp = requests.post("https://api.vapi.ai/tool", headers=HEADERS, json=tool_def)
@@ -167,9 +214,10 @@ def create_tool(tool_def):
 
 
 def create_assistant(tool_ids):
+    name_suffix = " (Swedish)" if LANGUAGE == "sv" else ""
     payload = {
-        "name": "Basilico Trattoria Host",
-        "firstMessage": "Thanks for calling Basilico Trattoria, this is Mia — how can I help you today?",
+       "name": f"Basilico Trattoria Host{name_suffix}",
+       "firstMessage": _content["first_message"],
         "model": {
             "provider": "anthropic",
             "model": "claude-haiku-4-5-20251001",
@@ -177,8 +225,8 @@ def create_assistant(tool_ids):
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
             "toolIds": tool_ids,
         },
-        "voice": {"provider": "deepgram", "voiceId": "luna"},
-        "transcriber": {"provider": "deepgram", "model": "nova-2", "language": "en-US"},
+        "voice": {"provider": VOICE_PROVIDER, "voiceId": VOICE_ID},
+        "transcriber": {"provider": "deepgram", "model": "nova-2", "language": TRANSCRIBER_LANGUAGE},
         "server": {"url": SERVER_URL},
         "endCallFunctionEnabled": True,
         "maxDurationSeconds": 300,
