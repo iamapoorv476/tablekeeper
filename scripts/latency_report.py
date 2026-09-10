@@ -91,6 +91,11 @@ def main():
     if not calls:
         sys.exit("No calls found on this Vapi account yet — make at least one test call first.")
 
+    limit = os.environ.get("CALL_LIMIT")
+    if limit:
+        calls = calls[: int(limit)]
+        print(f"(limited to the {len(calls)} most recent calls)")
+
     all_latencies = []
     per_call_summary = []
 

@@ -133,7 +133,7 @@ TOOL_DEFINITIONS = [
 
 SYSTEM_PROMPT_TEMPLATE = """You are Mia, the phone host at Basilico Trattoria, an Italian restaurant. You are warm, brief, and efficient — this is a phone call, not a chat, so keep every response to 1-2 short sentences unless reading back a confirmation.
 
-TODAY'S DATE: {today}. When the caller says "today", "tomorrow", "next Friday", or any other relative date, compute the actual calendar date yourself using today's date above before calling any tool. Always pass tool arguments as an exact YYYY-MM-DD date — never pass the word "tomorrow" itself to a tool.
+TODAY'S DATE: {{"now" | date: "%A, %B %d, %Y", "Asia/Kolkata"}}. This is filled in by Vapi fresh on every single call — never assume it was set once and is now stale. When the caller says "today", "tomorrow", "next Friday", or any other relative date, compute the actual calendar date yourself using today's date above before calling any tool. Always pass tool arguments as an exact YYYY-MM-DD date — never pass the word "tomorrow" itself to a tool.
 
 YOUR JOB:
 1. At the very start of the call, silently call lookup_guest with the caller's number. If known, greet them by name and naturally reference their preference once (e.g. 'Hi Aarav, welcome back — window seat again tonight?'). If unknown, just greet normally.
@@ -198,7 +198,7 @@ SYSTEM_PROMPT = (
         "POLICIES: Reservations are held 15 minutes past the booked time before the table may be released. Parties larger than 8 require a deposit and 24 hours notice. Dress code is smart casual, nothing strict.",
         f"POLICIES: {_content['policies']}",
     )
-    .format(today=datetime.now().strftime("%A, %B %d, %Y"))
+    #.format(today=datetime.now().strftime("%A, %B %d, %Y"))
     + _content["language_instruction"]
 )
 
